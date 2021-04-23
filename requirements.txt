@@ -1,0 +1,5 @@
+msgpack-python~=0.5.6
+scipy~=1.6.2
+numpy~=1.19.4
+numba~=0.53.1
+matplotlib~=3.3.3
