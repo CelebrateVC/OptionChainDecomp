@@ -1,13 +1,17 @@
+import math
 import pickle
 
 import matplotlib.pyplot as plt
 import numpy as np
 import scipy.stats
+from numba import cuda
 from numba import njit, prange
 
+cuda.select_device(0)
 
-@njit()
-def pdf(mu, sig, X):
+
+@cuda.jit
+def pdfGPU(mu, sig, X):
     """
     Probability Density function for the Gaussian Normal Distribution
 
@@ -16,62 +20,149 @@ def pdf(mu, sig, X):
     :param X: point on distribution
     :return: instantaneous density of X under distribution
     """
-    return np.exp(-np.power(X - mu, 2) / (2 * sig ** 2)) / np.sqrt(2 * np.pi * sig ** 2)
+    i = cuda.grid(1)
+    j = i // X.shape[1]
+    i = i % X.shape[1]
+
+    if j < X.shape[0]:
+        X[j][i] = math.exp(-math.pow(math.log(X[j][i]) - mu[j], 2) / (2 * sig[j] ** 2)) / (
+                X[j][i] * math.sqrt(2 * np.pi * sig[j] ** 2))
 
 
+# def cdfGPU(mu, sig, x, delta):
+#    """
+#    Simple Quad integration of the PDF between X and X+Delta
+#
+#    :param mu: mean of distribution
+#    :param sig: standard div of distribution
+#    :param x:  point on distribution
+#    :param delta: small margin to go up the distribution (defined to make a closed area)
+#    :return: the probability of being this price
+#    """
+#    DX = .01
+#    
+#    X = np.arange(x, delta,.01).reshape((1,-1))
+#    
+#    threads = 32
+#    blocks = (X.shape[0]*X.shape[1]+threads-1)//threads
+#    
+#    pdfGPU[blocks,threads](np.array([mu]), np.array([sig]), X)
+#    
+#    return X.sum() * DX
+
+
+# @cuda.jit(device=True)
 @njit()
-def cdf(mu, sig, x, delta):
-    """
-    Simple Quad integration of the PDF between X and X+Delta
-
-    :param mu: mean of distribution
-    :param sig: standard div of distribution
-    :param x:  point on distribution
-    :param delta: small margin to go up the distribution (defined to make a closed area)
-    :return: the probability of being this price
-    """
-    DX = np.linspace(x, x + delta)[1] - x
-    return pdf(mu, sig, np.linspace(x, x + delta)).sum() * DX
-
-
-@njit()
-def call(strike, mu, sig, partial):
-    """
-    Calculate The Discrete Price Estimate for a Call for an underlying with given Mean and ST Div
-
-    :param strike: strike price of the option
-    :param mu: mean of distribution
-    :param sig: standard deviation of distribution
-    :param partial: the Survival Function at 0 to scale the CDF by
-    :return: estimate of call price
-    """
-    su = 0.0
-    DX = np.linspace(0, max(mu * 3, 10), 500)[1]
-
-    for i in np.linspace(0, max(mu * 3, 10), 500):
-        su += max(0, i - strike) * cdf(mu, sig, i, DX) / (1 - partial)
-    return su
-
-
-@njit()
-def put(strike, mu, sig, partial):
+def call_device(strike, price, curve):
     """
     Calculate The Discrete Price Estimate for a Call for an underlying with given Mean and ST Div
 
     :param strike: strike price of option
-    :param mu: mean of distribution
-    :param sig: standard deviation of distribution
-    :param partial: the Survival Function at 0 to Scale the CDF by
+    :param price: single float asset prices under distribution
+    :param curve: single % chance of asset price
+    :return: estimate of call price
+    """
+
+    return max(0, price - strike) * curve
+
+
+# @cuda.jit(device=True)
+@njit()
+def put_device(strike, price, curve):
+    """
+    Calculate The Discrete Price Estimate for a Call for an underlying with given Mean and ST Div
+
+    :param strike: strike price of option
+    :param price: array of asset prices under distribution
+    :param curve: array of % chances of asset price
     :return: estimate of put price
     """
-    su = 0.0
-    DX = np.linspace(0, max(mu * 3, 10), 500)[1]
-    for i in np.linspace(0, max(mu * 3, 10), 500):
-        su += max(0, strike - i) * cdf(mu, sig, i, DX) / (1 - partial)
-    return su
+
+    return max(0, strike - price) * curve
+
+
+@njit()
+def call_price(strike, prices, curve):
+    """
+    Calculate The Discrete Price Estimate for a Call for an underlying with given Mean and ST Div
+
+    :param strike: strike price of option
+    :param prices: array of asset prices under distribution
+    :param curve: array of % chances of asset price
+    :return: estimate of call price
+    """
+
+    return (np.maximum(0, prices - strike) * curve).sum()
+
+
+@njit()
+def put_price(strike, prices, curve):
+    """
+    Calculate The Discrete Price Estimate for a Call for an underlying with given Mean and ST Div
+
+    :param strike: strike price of option
+    :param prices: array of asset prices under distribution
+    :param curve: array of % chances of asset price
+    :return: estimate of put price
+    """
+
+    return (np.maximum(0, strike - prices) * curve).sum()
 
 
 @njit(parallel=True)
+def error(X0, f_statics, price_arra, dist_arra, errn):
+    """
+    Given price curves, calculate the error for each option
+
+    :param X0: (?, 3) array of the form (weight, scale, shape) for lognormal dist
+    :param f_statics: array of options of form (strike_price, is_call, mark_price, error_weighting_factor)
+    :param price_arra: array of asset prices under distribution
+    :param dist_arra:  array of % chances of asset price for the above
+    :param errn: empty array to populate with values
+    :return: mutated error array
+    """
+
+    for i in prange(f_statics.shape[0]):
+        for j in prange(X0.shape[0]):
+            #    pij = cuda.grid(1)
+
+            #                if p>price_arra.shape[1]:
+            #                    return
+            strike, typ, mark, vol = f_statics[i]
+            weight, _, _ = X0[j][0], X0[j][1], X0[j][2]
+            prices, curve = price_arra[j], dist_arra[j]
+            if typ:
+                errn[i] += call_price(strike, prices, curve) * weight
+            else:
+                errn[i] += put_price(strike, prices, curve) * weight
+
+
+def get_price_curve(X0, curStock):
+    """
+    instantiate a CUDA kernel with stock prices following the distributions and with current stock price
+
+    :param X0: (?, 3) array of form (weight, scale [Mean], shape [deviance]
+    :param curStock: current price of the stock to transform growth %'s into prices
+    :return: price array with CDF evaluated % likelihood curve
+    """
+    prices = np.stack([np.linspace(-4, 4, 100_000) for _ in X0])
+    prices = np.exp(prices)
+    curve = cuda.to_device(np.ascontiguousarray(prices.copy()))
+    means = cuda.to_device(np.ascontiguousarray(X0[:, 1].tolist()))
+    stds = cuda.to_device(np.ascontiguousarray(X0[:, 2].tolist()))
+
+    threads = 32
+    blocks = (curve.shape[0] * curve.shape[1] + threads - 1) // threads
+
+    pdfGPU[blocks, threads](means, stds, curve)
+    curveprime = curve.copy_to_host()
+    curveprime = (curveprime.T * (prices[:, 1] - prices[:, 0])).T
+
+    prices = prices * curStock
+
+    return prices, curveprime
+
+
 def bayes_error(X0: np.array, f_statics, curStock) -> int:
     """
     Calculate the Root Sum Squared Weighted Error weighted by the vol column in f_statics
@@ -81,25 +172,16 @@ def bayes_error(X0: np.array, f_statics, curStock) -> int:
     :param curStock: the current stock price of the underlying asset
     :return: Root Sum Squared Weighted Error
     """
-    partial = np.zeros(X0.shape[0])
-    for i in prange(X0.shape[0]):
-        weight, mu, sig = X0[i][0], X0[i][1], X0[i][2]
-        for r in np.arange(-50, 0, .01):
-            partial[i] += cdf(mu, sig, r, .01)
+    prices, curve = get_price_curve(X0, curStock)
     errn = np.zeros(f_statics.shape[0])
-    for i in prange(f_statics.shape[0]):
-        strike, typ, mark, vol = f_statics[i]
-        for j in prange(X0.shape[0]):
-            weight, mu, sig = X0[j][0], X0[j][1], X0[j][2]
-            part = partial[j]
-            if typ:
-                errn[i] += call(strike, mu, sig, part) * weight
-            else:
-                errn[i] += put(strike, mu, sig, part) * weight
-        errn[i] -= mark
-        errn[i] = errn[i] ** 2 * vol
-    errn = errn / f_statics[:, 3].sum()
-    return np.sqrt(errn.sum())
+
+    # threads = 32
+    # blocks = (curve.shape[0] * curve.shape[1] + threads - 1) // threads
+    error(X0, f_statics, prices, curve, errn)
+
+    errn = np.sqrt((((errn - f_statics[:, 2]) ** 2 * f_statics[:, 3]) / f_statics[:, 3].sum()).sum())
+
+    return errn
 
 
 def static_array(f_statics, ticker=b'GME') -> np.array:
@@ -127,16 +209,22 @@ def PDF(x0, x_spread):
     :return: The PDF calculated for each element in the spread array
     """
     x0 = x0.reshape((-1, 3))
-    res = np.zeros_like(x_spread)
     # res2 = np.zeros_like(x_spread)
+    xx = np.stack([x_spread for _ in range(x0.shape[0])])
+    xx = np.ascontiguousarray(xx[:].tolist())
+    means = np.ascontiguousarray(x0[:, 1].tolist())
+    stds = np.ascontiguousarray(x0[:, 2].tolist())
 
+    threads = 32
+    blocks = (xx.shape[0] * xx.shape[1] + threads - 1) // threads
+    pdfGPU[blocks, threads](means, stds, xx)
+
+    xx = (xx.T * x0[:, 0]).sum(1)
     # dists = [(w, scipy.stats.norm(m, s)) for w, m, s in X0]
     # for i in range(x_spread.shape[0]):
     #     res2[i] = sum(w * d.pdf(x_spread[i]) for w, d in dists)
 
-    for w, mu, sig in x0:
-        res += pdf(mu, sig, x_spread) * w
-    return res / x0[:, 0].sum(),  # res2
+    return xx / x0[:, 0].sum(),  # res2
 
 
 def CDF(x0, x_spread):
@@ -148,8 +236,8 @@ def CDF(x0, x_spread):
     :return: The CDF calculated for each element in the x_spread array
     """
     x0 = x0.reshape((-1, 3))
-    dists = [(w, scipy.stats.norm(m, s), scipy.stats.norm(m, s).cdf(0)) for w, m, s in x0]
-    return np.array([sum(w * (d.cdf(x) - partial) / (1 - partial) for w, d, partial in dists) for x in x_spread])
+    dists = [(w, scipy.stats.norm(0, 1), m, s) for w, m, s in x0]
+    return np.array([sum(w * (d.cdf((np.log(x) - part) / ial)) for w, d, part, ial in dists) for x in x_spread])
 
 
 def CI(X0: np.array, f_static: np.array):
@@ -188,15 +276,23 @@ def graphs(m, f_statics, x_spread, curStock):
     :param curStock: the current stock price of the underlying asset
     :return: Nothing
     """
+
+    price, curve = get_price_curve(np.ascontiguousarray(m.x), curStock)
+
+    plt.plot(price[0], curve[0])
+    plt.xscale('log')
+    plt.figure()
+
     plt.annotate("Profitable", (0, 10))
     plt.annotate("OverPriced", (0, -10))
     plt.hlines(0, f_statics[:, 0].min(), f_statics[:, 0].max())
+
     plt.scatter([k for k, pc, _, _ in f_statics if pc],
-                [sum(call(k, m, s, 0) * w for w, m, s in m.x) - p
+                [sum(call_price(k, price[j], curve[j]) * m.x[j][0] for j in range(m.x.shape[0])) - p
                  for k, pc, p, _ in f_statics if pc],
                 c='red')
     plt.scatter([k for k, pc, *_ in f_statics if not pc],
-                [sum(put(k, m, s, 0) * w for w, m, s in m.x) - p
+                [sum(put_price(k, price[j], curve[j]) * m.x[j][0] for j in range(m.x.shape[0])) - p
                  for k, pc, p, _ in f_statics if not pc],
                 c='blue')
     plt.legend(["breakeven", "call", "put"])
@@ -204,7 +300,7 @@ def graphs(m, f_statics, x_spread, curStock):
     plt.figure()
     plt.title("Calls")
     plt.scatter([k for k, pc, _, _ in f_statics if pc],
-                [sum(call(k, m, s, 0) * w for w, m, s in m.x)
+                [sum(call_price(k, price[j], curve[j]) * m.x[j][0] for j in range(m.x.shape[0]))
                  for k, pc, p, _ in f_statics if pc],
                 c='red')
     plt.scatter([k for k, pc, *_ in f_statics if pc],
@@ -229,9 +325,9 @@ def graphs(m, f_statics, x_spread, curStock):
     for i in range(1, m.x.shape[0] + 1):
         plt.plot(x_spread, CDF(m.x[i - 1:i], x_spread), )
     plt.plot(x_spread, CDF(m.x, x_spread), lw=5)
-    l, h = CI(m.x, f_statics)
-    print(l, h)
-    plt.vlines([l, h], 0, 1, colors='k')
+    #    l, h = CI(m.x, f_statics)
+    #    print(l, h)
+    #    plt.vlines([l, h], 0, 1, colors='k')
     plt.show(block=True)
 
 
@@ -246,7 +342,7 @@ def analyze(f_statics, cur_stock):
 
     # Used for the display after optimizing - NOT Used in optimization
     x_spread = np.linspace(0.01,
-                           max(f_statics[:, 0]),
+                           8,  # max(statics[ticker].keys()),
                            1000)
 
     with open('pick.le', 'rb') as fin:
