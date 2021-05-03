@@ -2,3 +2,4 @@
 /dill.pickle
 /.idea/*
 /*.msgpack
+/venv
