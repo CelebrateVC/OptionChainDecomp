@@ -1,12 +1,9 @@
 # OptionChainDecomp
-This tool Takes one option chain and decomposes it down to component distributions
+One of the most powerful tools for option pricing for market makers is the [Black-Scholes Model](https://www.investopedia.com/terms/b/blackscholes.asp), which at it's base takes an understood forecast for the price of the underlying asset and performs a calculation to figure out the likelihood and payout amount at various prices and calculates the expected payout of the option under that assumption.  
 
-## Call
-![Call](https://i.imgur.com/ePakxWA.png)
-## Put 
-![Put](https://i.imgur.com/Wp1NBjq.png)
+This tool looks to reverse that process to get an understanding of the future prices of the asset by investigating one expiration time and building up a combination of distributions that best models the option price.
  
-to find an approximation of `Pr(x)` for the probability that the underlying asset reaches price x, Such that it satisfies 
+To find an approximation of `Pr(x)` for the probability that the underlying asset reaches price x, Such that it satisfies 
 
 ![CallEquation](https://latex.codecogs.com/gif.latex?%5Cbg_white%20%5Ctextup%7BCallPrice%7D_k%3D%5Cint%20%5Ctextup%7Bmin%7D%28x-k%2C0%29*%5Ctextup%7BPr%7D%28x%29%5Cdelta%20x)
 
@@ -60,7 +57,15 @@ to find an approximation of `Pr(x)` for the probability that the underlying asse
 }
 ```
 
-Where the RobinhoodScrape objects are minimally mark_price and open_interest, but for mine are 
+Where the RobinhoodScrape objects are minimally
+
+```json
+{
+   "mark_price": 35.675,
+   "open_interest": 45
+}
+```
+or more auspicously, the full package from the `api.robinhood.com/marketdata/options/?instruments=` authenticated endpoint
 ```json
 {
     "occ_symbol": "GME   210430P00187500",
@@ -105,7 +110,8 @@ Make your own fancy scraper if you want
  
 just have the devtools open (`F12` on most browsers) and filter down on GET queries for "/marketdata/options/" view the pages that you want and right click save as HAR
 
-This HAR will be a JSON file and in \["log"\]\["entries"\]\[i\]\["responce"\]\["content"\]\["text"\] there should be a json object as text, parse it and within that \["results"\] should be a list of these objects that I have been using
+This HAR will be a JSON file and in ["log"]["entries"][`i`]["responce"]["content"]["text"] there should be a json object as text,
+parse it and within that ["results"] should be a list of these objects that I have been using
 
 all the heirarchial information is in the `occ_symbol`
 
