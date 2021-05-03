@@ -15,14 +15,13 @@ import scipy.stats
 from numba import njit, prange
 import DistributionHandler
 
+ts = ['GOOGL 210604', 'GOOGL 230120', 'GOOGL 210611', 'GOOGL 210716', 'GOOGL 220916', 'GOOGL 210528', 'GOOGL 230616', 'GOOGL 210521', 'GOOGL 210507', 'GOOGL 220121', 'GOOGL 210514', 'GOOGL 210917', 'GOOGL 211015', 'GOOGL 210820', 'GOOGL 210618', 'GOOGL 211217', 'GOOGL 220617']
+
 # Change this to a message-pack file of the correct format (see ReadMe)
-with open('GME   230120.msgpack', 'rb') as f:
-    statics = msgpack.unpackb(f.read())
-ticker = b'GME'
-# Used for the display after optimizing - NOT Used in optimization
-spread = np.linspace(0,
-                     max(i for i in statics[ticker]) * 1.5,
-                     1000)
+with open('Goog Morning.msgpack', 'rb') as f:
+    statics = msgpack.unpack(f)
+ticker = b'GOOGL 230616'
+STOCK_PRICE = 2_377
 
 
 @njit()
@@ -51,7 +50,7 @@ def fn(X, stat, Xp, longer):
     :return: the result of calculating the error (with some normalization function on it if needs arise
     """
     X = conform(X, Xp, longer)
-    result = DistributionHandler.bayes_error(X, stat)
+    result = DistributionHandler.bayes_error(X, stat,STOCK_PRICE)
     return result
     # return result/20*np.sin(np.pi/4*result/20)
     # return result/np.log(result+1)+np.log(result)
@@ -59,7 +58,7 @@ def fn(X, stat, Xp, longer):
     # return result/3
 
 
-def main(f_statics, length=1, X0=None, prev=np.inf, ma=[]):
+def main(f_statics, length=1, X0=None, prev=np.inf, ma=[], first =True):
     """
     Optimize the following f_statics recursively until the error does not change by enough
 
@@ -82,7 +81,7 @@ def main(f_statics, length=1, X0=None, prev=np.inf, ma=[]):
     con = {'type': 'eq', 'fun': lambda x: 1 - x.ravel()[2:].sum()}
 
     bou = [(0, None),
-           (.01, None)] + [(0.01, None) for _ in range(length)]
+           (.01, None)]*longer + [(0.01, None) for _ in range(length)]
 
     m = scipy.optimize.minimize(fun=fn,
                                 args=(f_statics, X0, longer),
@@ -103,13 +102,13 @@ def main(f_statics, length=1, X0=None, prev=np.inf, ma=[]):
 
     if prev / m.fun > 1.1 or (prev - m.fun) / f_statics[:, 0].mean() > .005:
         print("=" * 20)
-        mdeeper = main(f_statics, length + 1, m.x, m.fun, ma)
+        mdeeper = main(f_statics, length + 1, m.x, m.fun, ma, False)
         # print(ma)
         if mdeeper is not None:
             m = mdeeper
     else:
         return None
-    if length == 1:
+    if first:
         with open('pick.le', 'wb') as fin:
             pickle.dump(m, fin)
         with open('dill.pickle', 'wb') as fin:
@@ -118,5 +117,6 @@ def main(f_statics, length=1, X0=None, prev=np.inf, ma=[]):
 
 
 if __name__ == "__main__":
-    main(DistributionHandler.static_array(statics, ticker), 1)
-    DistributionHandler.analyze(DistributionHandler.static_array(statics, ticker))
+    sta = DistributionHandler.static_array(statics, ticker)
+    main(sta, 3)
+    DistributionHandler.analyze(sta,STOCK_PRICE)

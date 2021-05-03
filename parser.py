@@ -15,14 +15,15 @@ import scipy.stats
 from numba import njit, prange
 import DistributionHandler
 
+ts = ['GOOGL 210604', 'GOOGL 230120', 'GOOGL 210611', 'GOOGL 210716', 'GOOGL 220916', 'GOOGL 210528', 'GOOGL 230616',
+      'GOOGL 210521', 'GOOGL 210507', 'GOOGL 220121', 'GOOGL 210514', 'GOOGL 210917', 'GOOGL 211015', 'GOOGL 210820',
+      'GOOGL 210618', 'GOOGL 211217', 'GOOGL 220617']
+
 # Change this to a message-pack file of the correct format (see ReadMe)
-with open('GME   230120.msgpack', 'rb') as f:
-    statics = msgpack.unpackb(f.read())
-ticker = b'GME'
-# Used for the display after optimizing - NOT Used in optimization
-spread = np.linspace(0,
-                     max(i for i in statics[ticker]) * 1.5,
-                     1000)
+with open('Goog Morning.msgpack', 'rb') as f:
+    statics = msgpack.unpack(f)
+ticker = b'GOOGL 230616'
+STOCK_PRICE = 2_377
 
 
 @njit()
@@ -36,7 +37,7 @@ def conform(X0):
     return X0.reshape((-1, 3))
 
 
-def fn(X, stat):
+def fn(X, stat, cur_stock):
     """
     Function called by the optimization
 
@@ -45,7 +46,7 @@ def fn(X, stat):
     :return: the result of calculating the error (with some normalization function on it if needs arise
     """
     X = conform(X)
-    result = DistributionHandler.bayes_error(X, stat)
+    result = DistributionHandler.bayes_error(X, stat, cur_stock)
     return result
     # return result/20*np.sin(np.pi/4*result/20)
     # return result/np.log(result+1)+np.log(result)
@@ -53,7 +54,7 @@ def fn(X, stat):
     # return result/3
 
 
-def main(f_statics, length=1, X0=None, prev=np.inf, ma=[]):
+def main(f_statics, length=1, X0=None, prev=np.inf, ma=[], first=True):
     """
     Optimize the following f_statics recursively until the error does not change by enough
 
@@ -76,16 +77,16 @@ def main(f_statics, length=1, X0=None, prev=np.inf, ma=[]):
 
     X0 = np.vstack((X0, X1))
     con = {'type': 'eq', 'fun': lambda x: 1 - x.ravel()[::3].sum()}
-    print(fn(X0, statics))
+    print(fn(X0, f_statics, STOCK_PRICE))
     bou = [(.001, None)
            if i % 3 == 0 else
            (0, None)
            if i % 3 == 1 else
-           (.001, None)
+           (.05, 1000)
            for i in range(length * 3)]
 
     m = scipy.optimize.minimize(fun=fn,
-                                args=(f_statics,),
+                                args=(f_statics, STOCK_PRICE),
                                 x0=X0,
                                 constraints=con,
                                 bounds=bou,
@@ -104,13 +105,13 @@ def main(f_statics, length=1, X0=None, prev=np.inf, ma=[]):
 
     if prev / m.fun > 1.1 or prev - m.fun > 2:
         print("=" * 20)
-        m_deeper = main(f_statics, length + 1, m.x, m.fun, ma)
-        print(ma)
+        m_deeper = main(f_statics, length + 1, m.x, m.fun, ma, False)
+        # print(ma)
         if m_deeper is not None:
             m = m_deeper
     else:
         return None
-    if length == 1:
+    if first:
         with open('pick.le', 'wb') as fin:
             pickle.dump(m, fin)
         with open('dill.pickle', 'wb') as fin:
@@ -119,5 +120,8 @@ def main(f_statics, length=1, X0=None, prev=np.inf, ma=[]):
 
 
 if __name__ == "__main__":
-    main(DistributionHandler.static_array(statics, ticker))
-    DistributionHandler.analyze(DistributionHandler.static_array(statics, ticker))
+    sta = DistributionHandler.static_array(statics, ticker)
+    # print(sta)
+    main(sta, 1)
+    print("=" * 20, "ResultSet", "=" * 20, sep='\n')
+    DistributionHandler.analyze(sta, STOCK_PRICE)
