@@ -3,3 +3,4 @@ scipy~=1.6.2
 numpy~=1.22.2
 numba~=0.53.1
 matplotlib~=3.3.3
+pillow>=10.2.0 # not directly required, pinned by Snyk to avoid a vulnerability
